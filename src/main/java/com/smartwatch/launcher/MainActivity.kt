@@ -18,15 +18,15 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.smartwatch.launcher.model.AppInfo
 import com.smartwatch.launcher.model.BitmapUtils
-import com.smartwatch.launcher.ui.BubbleCanvasView
 import com.smartwatch.launcher.ui.WatchFaceContainerView
+import com.smartwatch.launcher.ui.themes.AppThemeContainerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var bubbleCanvasView: BubbleCanvasView
+    private lateinit var appThemeContainerView: AppThemeContainerView
     private lateinit var watchFaceContainerView: WatchFaceContainerView
 
     private val packageChangeReceiver = object : BroadcastReceiver() {
@@ -40,14 +40,12 @@ class MainActivity : AppCompatActivity() {
         configureFullScreenWatchMode()
         setContentView(R.layout.activity_main)
 
-        bubbleCanvasView = findViewById(R.id.bubbleCanvasView)
+        appThemeContainerView = findViewById(R.id.appThemeContainerView)
         watchFaceContainerView = findViewById(R.id.watchFaceContainerView)
 
-        // Ensure Watch Face starts in front
         watchFaceContainerView.bringToFront()
         watchFaceContainerView.visibility = View.VISIBLE
 
-        // Hardware Back Button: Exits customizer mode or returns to clock
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
@@ -58,7 +56,7 @@ class MainActivity : AppCompatActivity() {
                         watchFaceContainerView.showClock()
                     }
                     else -> {
-                        bubbleCanvasView.resetToCenter(animated = true)
+                        appThemeContainerView.resetToCenter(animated = true)
                     }
                 }
             }
@@ -71,19 +69,16 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // Hardware Home/Crown Button returns to Watch Face
         if (watchFaceContainerView.isCustomizerMode) {
             watchFaceContainerView.exitCustomizerMode(save = false)
         }
         watchFaceContainerView.showClock()
-        bubbleCanvasView.resetToCenter(animated = true)
+        appThemeContainerView.resetToCenter(animated = true)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            hideSystemBars()
-        }
+        if (hasFocus) hideSystemBars()
     }
 
     override fun onDestroy() {
@@ -154,7 +149,7 @@ class MainActivity : AppCompatActivity() {
                 .sortedBy { it.label.lowercase() }
 
             withContext(Dispatchers.Main) {
-                bubbleCanvasView.setApps(appList)
+                appThemeContainerView.setApps(appList)
             }
         }
     }
