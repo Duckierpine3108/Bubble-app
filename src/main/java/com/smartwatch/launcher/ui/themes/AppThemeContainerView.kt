@@ -1,14 +1,7 @@
 package com.smartwatch.launcher.ui.themes
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
@@ -17,8 +10,11 @@ import android.view.View
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import com.smartwatch.launcher.model.AppInfo
-import kotlin.math.min
+import com.smartwatch.launcher.ui.BubbleCanvasView
 
+/**
+ * Host View for Active App Theme with integrated ThemeSelectorOverlayView.
+ */
 class AppThemeContainerView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -28,79 +24,60 @@ class AppThemeContainerView @JvmOverloads constructor(
     private val themeManager = AppThemeManager(context)
     private var appsList: List<AppInfo> = emptyList()
 
+    private val activeThemeHolder = FrameLayout(context)
     private var activeThemeView: View? = null
-    private var isSwitcherMode = false
-    private var switcherScale = 1.0f
-    private var previewThemeIndex = themeManager.currentTheme.id
 
-    private var cx = 0f
-    private var cy = 0f
-    private var radius = 0f
-    private val screenClipPath = Path()
-
-    private val overlayPaint = Paint().apply { color = Color.argb(190, 0, 0, 0) }
-    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textAlign = Paint.Align.CENTER
-        isFakeBoldText = true
-    }
-    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF00E5FF.toInt()
-        textAlign = Paint.Align.CENTER
-    }
-    private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(220, 20, 24, 32)
-        style = Paint.Style.FILL
-    }
-    private val activeDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF00E5FF.toInt() }
-    private val inactiveDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(100, 255, 255, 255) }
-    private val badgeRect = RectF()
+    private val selectorOverlay = ThemeSelectorOverlayView(context)
 
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onLongPress(e: MotionEvent) {
-            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-            openSwitcher()
-        }
-
-        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            if (isSwitcherMode) {
-                applyTheme(AppTheme.fromId(previewThemeIndex))
-                return true
+            if (!selectorOverlay.isOpen) {
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                openThemeSelector()
             }
-            return false
-        }
-
-        override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-            if (isSwitcherMode) {
-                val diffX = (e2.x) - (e1?.x ?: 0f)
-                if (diffX < -40f) cycleTheme(1)
-                else if (diffX > 40f) cycleTheme(-1)
-                return true
-            }
-            return false
         }
     })
 
     init {
-        setWillNotDraw(false)
+        // 1. Add Active Theme Container
+        addView(activeThemeHolder, LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+
+        // 2. Add Dedicated Theme Selector Overlay On Top
+        addView(selectorOverlay, LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+
+        selectorOverlay.onThemeSelectedListener = { selectedTheme ->
+            applyTheme(selectedTheme, save = true)
+        }
+
+        selectorOverlay.onDismissListener = {
+            restoreActiveViewScale()
+        }
+
         applyTheme(themeManager.currentTheme, save = false)
     }
 
     override fun setApps(apps: List<AppInfo>) {
         this.appsList = apps
-        (activeThemeView as? AppThemeView)?.setApps(apps)
+        notifyAppsToChild(activeThemeView)
     }
 
     override fun resetToCenter(animated: Boolean) {
-        if (isSwitcherMode) closeSwitcher()
-        (activeThemeView as? AppThemeView)?.resetToCenter(animated)
+        if (selectorOverlay.isOpen) {
+            selectorOverlay.close()
+            return
+        }
+        when (val v = activeThemeView) {
+            is AppThemeView -> v.resetToCenter(animated)
+            is BubbleCanvasView -> v.resetToCenter(animated)
+        }
     }
 
-    private fun applyTheme(theme: AppTheme, save: Boolean = true) {
+    private fun applyTheme(theme: AppTheme, save: Boolean) {
         if (save) themeManager.currentTheme = theme
-        removeAllViews()
+        activeThemeHolder.removeAllViews()
 
         val newView: View = when (theme) {
+            AppTheme.BUBBLE_CLOUD -> BubbleCanvasView(context)
             AppTheme.ROTARY_WHEEL -> RotaryWheelView(context)
             AppTheme.VORTEX_TUNNEL -> VortexTunnelView(context)
             AppTheme.HONEYCOMB_MATRIX -> HoneycombGridView(context)
@@ -109,101 +86,54 @@ class AppThemeContainerView @JvmOverloads constructor(
         }
 
         activeThemeView = newView
-        addView(newView, LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-        (newView as? AppThemeView)?.setApps(appsList)
-
-        if (isSwitcherMode) closeSwitcher()
+        activeThemeHolder.addView(newView, LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        notifyAppsToChild(newView)
+        restoreActiveViewScale()
     }
 
-    private fun openSwitcher() {
-        isSwitcherMode = true
-        previewThemeIndex = themeManager.currentTheme.id
-        ValueAnimator.ofFloat(1.0f, 0.78f).apply {
-            duration = 280
-            interpolator = OvershootInterpolator(1.2f)
-            addUpdateListener {
-                switcherScale = it.animatedValue as Float
-                activeThemeView?.scaleX = switcherScale
-                activeThemeView?.scaleY = switcherScale
-                invalidate()
-            }
-            start()
+    private fun notifyAppsToChild(view: View?) {
+        when (view) {
+            is AppThemeView -> view.setApps(appsList)
+            is BubbleCanvasView -> view.setApps(appsList)
         }
     }
 
-    private fun closeSwitcher() {
-        ValueAnimator.ofFloat(switcherScale, 1.0f).apply {
+    private fun openThemeSelector() {
+        ValueAnimator.ofFloat(1.0f, 0.82f).apply {
             duration = 240
+            interpolator = OvershootInterpolator(1.15f)
             addUpdateListener {
-                switcherScale = it.animatedValue as Float
-                activeThemeView?.scaleX = switcherScale
-                activeThemeView?.scaleY = switcherScale
-                invalidate()
+                val s = it.animatedValue as Float
+                activeThemeHolder.scaleX = s
+                activeThemeHolder.scaleY = s
             }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) {
-                    isSwitcherMode = false
-                    invalidate()
-                }
-            })
             start()
         }
+        selectorOverlay.open(themeManager.currentTheme)
     }
 
-    private fun cycleTheme(dir: Int) {
-        val total = AppTheme.values().size
-        previewThemeIndex = (previewThemeIndex + dir + total) % total
-        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        invalidate()
+    private fun restoreActiveViewScale() {
+        activeThemeHolder.animate()
+            .scaleX(1.0f)
+            .scaleY(1.0f)
+            .setDuration(220)
+            .start()
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // Two-Finger Double Tap Shortcut
         if (ev.pointerCount == 2 && ev.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
-            openSwitcher()
-            return true
-        }
-        if (isSwitcherMode) {
-            gestureDetector.onTouchEvent(ev)
-            return true
-        }
-        gestureDetector.onTouchEvent(ev)
-        return super.dispatchTouchEvent(ev)
-    }
-
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        cx = w / 2f
-        cy = h / 2f
-        radius = min(cx, cy)
-        screenClipPath.reset()
-        screenClipPath.addCircle(cx, cy, radius, Path.Direction.CW)
-        titlePaint.textSize = radius * 0.12f
-        subPaint.textSize = radius * 0.08f
-    }
-
-    override fun dispatchDraw(canvas: Canvas) {
-        super.dispatchDraw(canvas)
-        if (isSwitcherMode) {
-            canvas.clipPath(screenClipPath)
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), overlayPaint)
-
-            val current = AppTheme.fromId(previewThemeIndex)
-            val badgeW = radius * 1.35f
-            val badgeH = radius * 0.38f
-            val badgeY = height * 0.80f
-
-            badgeRect.set(cx - (badgeW / 2f), badgeY - (badgeH / 2f), cx + (badgeW / 2f), badgeY + (badgeH / 2f))
-            canvas.drawRoundRect(badgeRect, badgeH / 2f, badgeH / 2f, badgePaint)
-            canvas.drawText(current.title, cx, badgeY - (radius * 0.03f), titlePaint)
-            canvas.drawText("TAP TO SELECT", cx, badgeY + (radius * 0.09f), subPaint)
-
-            val total = AppTheme.values().size
-            val spacing = radius * 0.10f
-            val startX = cx - ((total - 1) * spacing) / 2f
-            for (i in 0 until total) {
-                val p = if (i == previewThemeIndex) activeDotPaint else inactiveDotPaint
-                canvas.drawCircle(startX + (i * spacing), height * 0.14f, radius * 0.024f, p)
+            if (!selectorOverlay.isOpen) {
+                openThemeSelector()
+                return true
             }
         }
+
+        if (selectorOverlay.isOpen) {
+            return selectorOverlay.dispatchTouchEvent(ev)
+        }
+
+        gestureDetector.onTouchEvent(ev)
+        return super.dispatchTouchEvent(ev)
     }
 }
