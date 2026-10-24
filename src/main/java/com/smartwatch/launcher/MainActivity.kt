@@ -19,7 +19,7 @@ import androidx.lifecycle.lifecycleScope
 import com.smartwatch.launcher.model.AppInfo
 import com.smartwatch.launcher.model.BitmapUtils
 import com.smartwatch.launcher.ui.BubbleCanvasView
-import com.smartwatch.launcher.ui.FrostedGlassClockView
+import com.smartwatch.launcher.ui.WatchFaceContainerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
 
     private lateinit var bubbleCanvasView: BubbleCanvasView
-    private lateinit var frostedClockView: FrostedGlassClockView
+    private lateinit var watchFaceContainerView: WatchFaceContainerView
 
     private val packageChangeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -40,25 +40,26 @@ class MainActivity : AppCompatActivity() {
         configureFullScreenWatchMode()
         setContentView(R.layout.activity_main)
 
-        // 1. Connect Views from activity_main.xml
         bubbleCanvasView = findViewById(R.id.bubbleCanvasView)
-        frostedClockView = findViewById(R.id.frostedClockView)
-         
-        // Connect Views from activity_main.xml
-        bubbleCanvasView = findViewById(R.id.bubbleCanvasView)
-        frostedClockView = findViewById(R.id.frostedClockView)
+        watchFaceContainerView = findViewById(R.id.watchFaceContainerView)
 
-        // FORCE CLOCK TO FRONT
-        frostedClockView.bringToFront()
-        frostedClockView.visibility = View.VISIBLE
+        // Ensure Watch Face starts in front
+        watchFaceContainerView.bringToFront()
+        watchFaceContainerView.visibility = View.VISIBLE
 
-        // 2. Hardware Back Button: returns to the clock face if in apps
+        // Hardware Back Button: Exits customizer mode or returns to clock
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (frostedClockView.visibility == View.GONE) {
-                    frostedClockView.showClock()
-                } else {
-                    bubbleCanvasView.resetToCenter(animated = true)
+                when {
+                    watchFaceContainerView.isCustomizerMode -> {
+                        watchFaceContainerView.exitCustomizerMode(save = false)
+                    }
+                    watchFaceContainerView.visibility == View.GONE -> {
+                        watchFaceContainerView.showClock()
+                    }
+                    else -> {
+                        bubbleCanvasView.resetToCenter(animated = true)
+                    }
                 }
             }
         })
@@ -70,8 +71,11 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // Hardware Home/Crown Button: bring clock face back into view
-        frostedClockView.showClock()
+        // Hardware Home/Crown Button returns to Watch Face
+        if (watchFaceContainerView.isCustomizerMode) {
+            watchFaceContainerView.exitCustomizerMode(save = false)
+        }
+        watchFaceContainerView.showClock()
         bubbleCanvasView.resetToCenter(animated = true)
     }
 
@@ -115,9 +119,6 @@ class MainActivity : AppCompatActivity() {
         registerReceiver(packageChangeReceiver, filter)
     }
 
-    /**
-     * Dynamically queries all system and third-party launcher apps off the UI thread.
-     */
     private fun loadInstalledApps() {
         lifecycleScope.launch(Dispatchers.Default) {
             val pm = packageManager
@@ -135,7 +136,7 @@ class MainActivity : AppCompatActivity() {
             val iconPixelSize = (resources.displayMetrics.density * 64).toInt().coerceAtLeast(96)
 
             val appList = resolveInfos
-                .filter { it.activityInfo.packageName != packageName } // Filter self out
+                .filter { it.activityInfo.packageName != packageName }
                 .map { resolveInfo ->
                     val label = resolveInfo.loadLabel(pm).toString()
                     val pkgName = resolveInfo.activityInfo.packageName
