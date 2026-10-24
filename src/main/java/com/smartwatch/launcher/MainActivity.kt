@@ -43,6 +43,14 @@ class MainActivity : AppCompatActivity() {
         // 1. Connect Views from activity_main.xml
         bubbleCanvasView = findViewById(R.id.bubbleCanvasView)
         frostedClockView = findViewById(R.id.frostedClockView)
+         
+        // Connect Views from activity_main.xml
+        bubbleCanvasView = findViewById(R.id.bubbleCanvasView)
+        frostedClockView = findViewById(R.id.frostedClockView)
+
+        // FORCE CLOCK TO FRONT
+        frostedClockView.bringToFront()
+        frostedClockView.visibility = View.VISIBLE
 
         // 2. Hardware Back Button: returns to the clock face if in apps
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
