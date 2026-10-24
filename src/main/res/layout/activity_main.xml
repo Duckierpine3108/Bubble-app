@@ -4,8 +4,15 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
+    <!-- Underlying Bubble Cloud Launcher -->
     <com.smartwatch.launcher.ui.BubbleCanvasView
         android:id="@+id/bubbleCanvasView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Foreground Frosted Glass Clock Dial -->
+    <com.smartwatch.launcher.ui.FrostedGlassClockView
+        android:id="@+id/frostedClockView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
