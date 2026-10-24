@@ -1,5 +1,7 @@
 package com.smartwatch.launcher.ui
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -18,7 +20,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
-import com.smartwatch.launcher.ui.watchfaces.WatchFaceManager
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -115,13 +116,13 @@ class WatchFaceContainerView @JvmOverloads constructor(
         }
 
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-            val startX = e1?.x ?: return false
-            val diffX = e2.x - startX
-            val diffY = e2.y - (e1.y)
+            if (e1 == null) return false
+            val diffX = e2.x - e1.x
+            val diffY = e2.y - e1.y
 
             if (isCustomizerMode) {
-                if (diffX < -50) cyclePreview(1)
-                else if (diffX > 50) cyclePreview(-1)
+                if (diffX < -50f) cyclePreview(1)
+                else if (diffX > 50f) cyclePreview(-1)
                 return true
             }
 
@@ -173,10 +174,8 @@ class WatchFaceContainerView @JvmOverloads constructor(
         val timeNow = System.currentTimeMillis()
 
         if (!isCustomizerMode) {
-            // Render active full-screen watch face
             watchFaceManager.getActiveRenderer().draw(canvas, timeNow, batteryPercent)
         } else {
-            // Render Customizer / Picker Mode
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimOverlayPaint)
 
             canvas.save()
@@ -187,14 +186,12 @@ class WatchFaceContainerView @JvmOverloads constructor(
             drawCustomizerOverlay(canvas)
         }
 
-        // Keep 60 FPS animation loop active only when visible
         if (visibility == VISIBLE && isAttachedToWindow) {
             postInvalidateOnAnimation()
         }
     }
 
     private fun drawCustomizerOverlay(canvas: Canvas) {
-        // Dial Name Badge
         val currentName = watchFaceManager.renderers[previewIndex].getName()
         val textWidth = titleTextPaint.measureText(currentName)
         val badgeHeight = radius * 0.22f
@@ -211,7 +208,6 @@ class WatchFaceContainerView @JvmOverloads constructor(
         val textBaseline = badgeY - ((titleTextPaint.descent() + titleTextPaint.ascent()) / 2f)
         canvas.drawText(currentName, cx, textBaseline, titleTextPaint)
 
-        // Carousel Dot Indicators at the Top
         val total = watchFaceManager.renderers.size
         val dotRadius = radius * 0.022f
         val dotSpacing = radius * 0.08f
@@ -250,10 +246,12 @@ class WatchFaceContainerView @JvmOverloads constructor(
                 customizerScale = it.animatedValue as Float
                 invalidate()
             }
-            withEndAction {
-                isCustomizerMode = false
-                invalidate()
-            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    isCustomizerMode = false
+                    invalidate()
+                }
+            })
             start()
         }
     }
@@ -269,9 +267,6 @@ class WatchFaceContainerView @JvmOverloads constructor(
         return gestureDetector.onTouchEvent(event) || super.onTouchEvent(event)
     }
 
-    /**
-     * Smoothly slides out to the left to reveal BubbleCanvasView.
-     */
     fun revealApps(animated: Boolean = true) {
         if (isCustomizerMode) exitCustomizerMode(save = false)
         if (!animated) {
@@ -289,9 +284,6 @@ class WatchFaceContainerView @JvmOverloads constructor(
             .start()
     }
 
-    /**
-     * Smoothly slides back in from the left over BubbleCanvasView.
-     */
     fun showClock(animated: Boolean = true) {
         visibility = VISIBLE
         bringToFront()
