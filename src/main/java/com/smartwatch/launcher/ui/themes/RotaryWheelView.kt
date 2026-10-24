@@ -5,16 +5,19 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.OverScroller
 import com.smartwatch.launcher.model.AppInfo
 import kotlin.math.abs
@@ -25,11 +28,12 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Premium Rotary Wheel Rim Menu:
- * - Fixed 38° angular spacing with strict 5–7 visible item culling to prevent clustering.
- * - Smooth cubic Hermite scaling and opacity falloff.
- * - Magnetic detent snap-to-item physics on drag release.
- * - Back-to-front rendering so the centered active app always sits above neighbors.
+ * Premium Smartwatch Rotary Rim Menu:
+ * - 27.5° optimal angular pacing ensuring 5 to 7 visible icons without crowding or sparse voids.
+ * - Dynamic glowing cyan bezel arc track with luxury orbital watch gauge tick marks.
+ * - Active center pop-out (1.35x magnification) with glowing neon halo and drop shadow.
+ * - Frosted glass center launcher card with elastic spring-scale bounce upon item snapping.
+ * - Mechanical rotary crown momentum and magnetic detent snapping.
  */
 class RotaryWheelView @JvmOverloads constructor(
     context: Context,
@@ -44,25 +48,55 @@ class RotaryWheelView @JvmOverloads constructor(
     private var wheelRadius = 0f
     private var baseIconRadius = 0f
 
-    // 180° corresponds to the 9 o'clock active selection position
+    // 180° = 9 o'clock active selection position
     private var rotationAngle = 180f
-    private val angleStep = 38f
+    private val angleStep = 27.5f
+
+    // Track active item changes to trigger spring pop
+    private var lastFocusedIndex = -1
+    private var cardSpringScale = 1.0f
 
     private val scroller = OverScroller(context)
     private val gestureDetector = GestureDetector(context, GestureListener())
     private var snapAnimator: ValueAnimator? = null
+    private var cardBounceAnimator: ValueAnimator? = null
 
     private val screenClipPath = Path()
-    private val rimTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+
+    // 1. Arc Track & Gauge Tick Paints
+    private val trackGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.argb(40, 0, 229, 255)
-        strokeWidth = 3f
+        strokeWidth = 14f
+        color = Color.argb(32, 0, 229, 255)
     }
-    private val activeDetentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF00E5FF.toInt()
+    private val trackCorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 5f
+        strokeWidth = 2.5f
+        color = Color.argb(90, 0, 229, 255)
+    }
+    private val trackDetentGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 6f
         strokeCap = Paint.Cap.ROUND
+        color = 0xFF00E5FF.toInt()
+        setShadowLayer(10f, 0f, 0f, 0xFF00E5FF.toInt())
+    }
+    private val gaugeTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+
+    // 2. Center Card Paints
+    private val cardShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(120, 0, 0, 0)
+        style = Paint.Style.FILL
+    }
+    private val cardBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val cardBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.2f
     }
     private val centerTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -72,23 +106,27 @@ class RotaryWheelView @JvmOverloads constructor(
     private val centerSubPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFF00E5FF.toInt()
         textAlign = Paint.Align.CENTER
-    }
-    private val centerHudBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(205, 14, 18, 24)
-        style = Paint.Style.FILL
-    }
-    private val centerHudBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
-        color = Color.argb(70, 0, 229, 255)
+        isFakeBoldText = true
     }
 
+    // 3. Icon & Halo Paints
+    private val activeGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+        color = 0xFF00E5FF.toInt()
+        setShadowLayer(12f, 0f, 0f, 0xFF00E5FF.toInt())
+    }
+    private val activeHaloDisc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.argb(50, 0, 229, 255)
+    }
     private val iconDstRect = Rect()
     private val iconSrcRect = Rect()
     private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val hudRect = RectF()
+    private val hudShadowRect = RectF()
 
-    private data class RenderNode(
+    private data class WheelNode(
         val index: Int,
         val app: AppInfo,
         val angleDeg: Float,
@@ -99,7 +137,7 @@ class RotaryWheelView @JvmOverloads constructor(
         val y: Float
     )
 
-    private val renderList = ArrayList<RenderNode>()
+    private val renderList = ArrayList<WheelNode>()
 
     init {
         isClickable = true
@@ -109,6 +147,7 @@ class RotaryWheelView @JvmOverloads constructor(
     override fun setApps(apps: List<AppInfo>) {
         this.apps = apps
         rotationAngle = 180f
+        lastFocusedIndex = -1
         invalidate()
     }
 
@@ -129,29 +168,42 @@ class RotaryWheelView @JvmOverloads constructor(
         cy = h / 2f
         radius = min(cx, cy)
         wheelRadius = radius * 0.78f
-        baseIconRadius = radius * 0.13f
+        baseIconRadius = radius * 0.135f
 
         screenClipPath.reset()
         screenClipPath.addCircle(cx, cy, radius, Path.Direction.CW)
-        centerTitlePaint.textSize = radius * 0.13f
-        centerSubPaint.textSize = radius * 0.08f
+
+        centerTitlePaint.textSize = radius * 0.125f
+        centerSubPaint.textSize = radius * 0.078f
+
+        // Center frosted glass card background gradient
+        cardBgPaint.shader = LinearGradient(
+            cx - (radius * 0.5f), cy - (radius * 0.25f),
+            cx + (radius * 0.5f), cy + (radius * 0.25f),
+            intArrayOf(0xEE1E2836.toInt(), 0xF5101620.toInt()),
+            floatArrayOf(0f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        cardBorderPaint.shader = LinearGradient(
+            cx - (radius * 0.5f), cy - (radius * 0.25f),
+            cx + (radius * 0.5f), cy + (radius * 0.25f),
+            intArrayOf(0xFF00E5FF.toInt(), 0x3300E5FF.toInt()),
+            floatArrayOf(0f, 1f),
+            Shader.TileMode.CLAMP
+        )
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.clipPath(screenClipPath)
 
-        // 1. Draw subtle background guide rim and active detent at 9 o'clock
-        canvas.drawCircle(cx, cy, wheelRadius, rimTrackPaint)
-        canvas.drawArc(
-            cx - wheelRadius, cy - wheelRadius, cx + wheelRadius, cy + wheelRadius,
-            165f, 30f, false, activeDetentPaint
-        )
+        // 1. Draw Left Bezel Glow Arc and Luxury Gauge Ticks
+        drawGlowingRim(canvas)
 
         if (apps.isEmpty()) return
 
-        // 2. Identify the center-most item and cull items beyond a 7-node window
-        val centerIndex = ((180f - rotationAngle) / angleStep).roundToInt()
+        // 2. Collect visible icons in balanced 7-node window (180° ± 3 items)
+        val centerIndex = ((180f - rotationAngle) / angleStep).roundToInt().coerceIn(0, apps.size - 1)
         val minIdx = (centerIndex - 3).coerceAtLeast(0)
         val maxIdx = (centerIndex + 3).coerceAtMost(apps.size - 1)
 
@@ -164,15 +216,15 @@ class RotaryWheelView @JvmOverloads constructor(
             val diff = normalizeDegrees(itemAngle - 180f)
             val absDiff = abs(diff)
 
-            // Strict angular horizon: cull anything beyond 85° to prevent rim bunching
-            if (absDiff > 85f) continue
+            // Graceful horizon: items transition smoothly up to 88°
+            if (absDiff > 88f) continue
 
-            // Cubic smooth-step falloff
-            val norm = (absDiff / 85f).coerceIn(0f, 1f)
-            val smooth = 1.0f - (norm * norm * (3f - 2f * norm))
+            val norm = (absDiff / 88f).coerceIn(0f, 1f)
+            // Cosine continuous ease: 1.0 at center down to 0.0 at edge
+            val factor = (cos(norm * Math.PI) * 0.5 + 0.5).toFloat()
 
-            val scale = 0.35f + (1.20f - 0.35f) * smooth
-            val alpha = (255 * (smooth * smooth)).toInt().coerceIn(0, 255)
+            val scale = 0.52f + (1.35f - 0.52f) * factor
+            val alpha = (45 + (210 * factor)).toInt().coerceIn(0, 255)
 
             val rad = Math.toRadians(itemAngle.toDouble())
             val x = (cx + cos(rad) * wheelRadius).toFloat()
@@ -183,16 +235,29 @@ class RotaryWheelView @JvmOverloads constructor(
                 closestApp = apps[i]
             }
 
-            renderList.add(RenderNode(i, apps[i], itemAngle, absDiff, scale, alpha, x, y))
+            renderList.add(WheelNode(i, apps[i], itemAngle, absDiff, scale, alpha, x, y))
         }
 
-        // Draw outer items first; center item drawn last (on top of all others)
+        // Trigger spring bounce if focus snapped to a new app
+        if (centerIndex != lastFocusedIndex && minDiff < 10f) {
+            lastFocusedIndex = centerIndex
+            triggerCardBounce()
+        }
+
+        // 3. Render icons from back to front (center item on top)
         renderList.sortByDescending { it.absDiff }
 
         for (node in renderList) {
             val curRadius = baseIconRadius * node.scale
-            val bmp = node.app.iconBitmap
+            val isCenter = node.absDiff < 14f
 
+            // Center active item glowing halo surround
+            if (isCenter) {
+                canvas.drawCircle(node.x, node.y, curRadius * 1.18f, activeHaloDisc)
+                canvas.drawCircle(node.x, node.y, curRadius * 1.10f, activeGlowPaint)
+            }
+
+            val bmp = node.app.iconBitmap
             iconSrcRect.set(0, 0, bmp.width, bmp.height)
             iconDstRect.set(
                 (node.x - curRadius).toInt(), (node.y - curRadius).toInt(),
@@ -203,20 +268,105 @@ class RotaryWheelView @JvmOverloads constructor(
             canvas.drawBitmap(bmp, iconSrcRect, iconDstRect, iconPaint)
         }
 
-        // 3. Center HUD Display for active app
+        // 4. Render Center Frosted Glass Card with Spring Bounce
         closestApp?.let { app ->
-            val hudWidth = radius * 1.08f
-            val hudHeight = radius * 0.46f
-            hudRect.set(
-                cx - (hudWidth / 2f), cy - (hudHeight / 2f),
-                cx + (hudWidth / 2f), cy + (hudHeight / 2f)
-            )
-            canvas.drawRoundRect(hudRect, hudHeight / 2f, hudHeight / 2f, centerHudBg)
-            canvas.drawRoundRect(hudRect, hudHeight / 2f, hudHeight / 2f, centerHudBorder)
+            drawCenterCard(canvas, app)
+        }
 
-            val textY = cy - ((centerTitlePaint.descent() + centerTitlePaint.ascent()) / 2f) - (radius * 0.045f)
-            canvas.drawText(app.label, cx, textY, centerTitlePaint)
-            canvas.drawText("TAP TO OPEN", cx, textY + (radius * 0.13f), centerSubPaint)
+        // Subtle subtext breathing animation
+        postInvalidateOnAnimation()
+    }
+
+    private fun drawGlowingRim(canvas: Canvas) {
+        // Outer glow arc
+        canvas.drawArc(
+            cx - wheelRadius, cy - wheelRadius,
+            cx + wheelRadius, cy + wheelRadius,
+            96f, 168f, false, trackGlowPaint
+        )
+        // Sharp core track
+        canvas.drawArc(
+            cx - wheelRadius, cy - wheelRadius,
+            cx + wheelRadius, cy + wheelRadius,
+            96f, 168f, false, trackCorePaint
+        )
+        // Active 9 o'clock notch detent
+        canvas.drawArc(
+            cx - wheelRadius, cy - wheelRadius,
+            cx + wheelRadius, cy + wheelRadius,
+            167f, 26f, false, trackDetentGlow
+        )
+
+        // Luxury mechanical gauge ticks along left bezel
+        for (deg in 100..260 step 6) {
+            val rad = Math.toRadians(deg.toDouble())
+            val cosVal = cos(rad).toFloat()
+            val sinVal = sin(rad).toFloat()
+
+            val isMajor = (deg % 18 == 0)
+            val len1 = if (isMajor) radius * 0.035f else radius * 0.018f
+            val len2 = if (isMajor) radius * 0.015f else 0f
+
+            val rOuter = wheelRadius + len1
+            val rInner = wheelRadius - len2
+
+            val x1 = cx + cosVal * rOuter
+            val y1 = cy + sinVal * rOuter
+            val x2 = cx + cosVal * rInner
+            val y2 = cy + sinVal * rInner
+
+            gaugeTickPaint.strokeWidth = if (isMajor) 2.5f else 1.5f
+            gaugeTickPaint.color = if (isMajor) Color.argb(120, 0, 229, 255) else Color.argb(45, 255, 255, 255)
+            canvas.drawLine(x1, y1, x2, y2, gaugeTickPaint)
+        }
+    }
+
+    private fun drawCenterCard(canvas: Canvas, app: AppInfo) {
+        val cardW = radius * 1.10f * cardSpringScale
+        val cardH = radius * 0.48f * cardSpringScale
+        val cardX = cx + (radius * 0.06f)
+        val cardY = cy
+
+        canvas.save()
+
+        // Card Drop Shadow
+        hudShadowRect.set(
+            cardX - (cardW / 2f), cardY - (cardH / 2f) + (radius * 0.04f),
+            cardX + (cardW / 2f), cardY + (cardH / 2f) + (radius * 0.04f)
+        )
+        canvas.drawRoundRect(hudShadowRect, cardH / 2f, cardH / 2f, cardShadowPaint)
+
+        // Frosted Card Body
+        hudRect.set(
+            cardX - (cardW / 2f), cardY - (cardH / 2f),
+            cardX + (cardW / 2f), cardY + (cardH / 2f)
+        )
+        canvas.drawRoundRect(hudRect, cardH / 2f, cardH / 2f, cardBgPaint)
+        canvas.drawRoundRect(hudRect, cardH / 2f, cardH / 2f, cardBorderPaint)
+
+        // Title
+        val textY = cardY - ((centerTitlePaint.descent() + centerTitlePaint.ascent()) / 2f) - (radius * 0.045f)
+        canvas.drawText(app.label, cardX, textY, centerTitlePaint)
+
+        // Pulsing Neon Subtext
+        val pulse = (sin(System.currentTimeMillis() * 0.0036) * 0.5 + 0.5).toFloat()
+        val subAlpha = (170 + (pulse * 85)).toInt().coerceIn(0, 255)
+        centerSubPaint.color = Color.argb(subAlpha, 0, 229, 255)
+        canvas.drawText("TAP TO OPEN", cardX, textY + (radius * 0.135f), centerSubPaint)
+
+        canvas.restore()
+    }
+
+    private fun triggerCardBounce() {
+        cardBounceAnimator?.cancel()
+        cardBounceAnimator = ValueAnimator.ofFloat(0.91f, 1.0f).apply {
+            duration = 260
+            interpolator = OvershootInterpolator(2.2f)
+            addUpdateListener {
+                cardSpringScale = it.animatedValue as Float
+                invalidate()
+            }
+            start()
         }
     }
 
@@ -254,7 +404,7 @@ class RotaryWheelView @JvmOverloads constructor(
     private fun animateToAngle(targetAngle: Float) {
         snapAnimator?.cancel()
         snapAnimator = ValueAnimator.ofFloat(rotationAngle, targetAngle).apply {
-            duration = 240
+            duration = 230
             interpolator = DecelerateInterpolator(1.8f)
             addUpdateListener {
                 rotationAngle = it.animatedValue as Float
@@ -280,9 +430,9 @@ class RotaryWheelView @JvmOverloads constructor(
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
-            rotationAngle += (distanceY * 0.24f)
-            val minAngle = 180f - ((apps.size - 1) * angleStep) - 20f
-            val maxAngle = 180f + 20f
+            rotationAngle += (distanceY * 0.25f)
+            val minAngle = 180f - ((apps.size - 1) * angleStep) - 15f
+            val maxAngle = 180f + 15f
             rotationAngle = rotationAngle.coerceIn(minAngle, maxAngle)
             invalidate()
             return true
@@ -300,7 +450,7 @@ class RotaryWheelView @JvmOverloads constructor(
         }
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            // Tap on Center HUD Card
+            // 1. Check Center Frosted Card Tap
             if (hudRect.contains(e.x, e.y)) {
                 val centerIndex = ((180f - rotationAngle) / angleStep).roundToInt().coerceIn(0, apps.size - 1)
                 if (centerIndex in apps.indices) {
@@ -309,10 +459,10 @@ class RotaryWheelView @JvmOverloads constructor(
                 }
             }
 
-            // Tap on any visible rim icon
+            // 2. Check Visible Rim Icon Tap
             for (node in renderList) {
                 val curRadius = baseIconRadius * node.scale
-                if (hypot(e.x - node.x, e.y - node.y) <= curRadius * 1.3f) {
+                if (hypot(e.x - node.x, e.y - node.y) <= curRadius * 1.35f) {
                     launchApp(node.app)
                     return true
                 }
