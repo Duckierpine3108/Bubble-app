@@ -1,5 +1,7 @@
 package com.smartwatch.launcher.ui.themes
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
@@ -138,16 +140,18 @@ class AppThemeContainerView @JvmOverloads constructor(
                 activeThemeView?.scaleY = switcherScale
                 invalidate()
             }
-            withEndAction {
-                isSwitcherMode = false
-                invalidate()
-            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    isSwitcherMode = false
+                    invalidate()
+                }
+            })
             start()
         }
     }
 
     private fun cycleTheme(dir: Int) {
-        val total = AppTheme.entries.size
+        val total = AppTheme.values().size
         previewThemeIndex = (previewThemeIndex + dir + total) % total
         performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         invalidate()
@@ -193,7 +197,7 @@ class AppThemeContainerView @JvmOverloads constructor(
             canvas.drawText(current.title, cx, badgeY - (radius * 0.03f), titlePaint)
             canvas.drawText("TAP TO SELECT", cx, badgeY + (radius * 0.09f), subPaint)
 
-            val total = AppTheme.entries.size
+            val total = AppTheme.values().size
             val spacing = radius * 0.10f
             val startX = cx - ((total - 1) * spacing) / 2f
             for (i in 0 until total) {

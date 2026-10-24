@@ -12,7 +12,7 @@ enum class AppTheme(val id: Int, val title: String) {
     CARD_DECK(4, "Card Deck");
 
     companion object {
-        fun fromId(id: Int): AppTheme = entries.firstOrNull { it.id == id } ?: ROTARY_WHEEL
+        fun fromId(id: Int): AppTheme = values().firstOrNull { it.id == id } ?: ROTARY_WHEEL
     }
 }
 
